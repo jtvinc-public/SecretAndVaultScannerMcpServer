@@ -1,11 +1,10 @@
 import os
 import re
-import sys
-from mcp.server.fastmcp import FastMCP
-from azure.identity import DefaultAzureCredential
-from azure.keyvault.secrets import SecretClient
 import boto3
 import hvac
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+from mcp.server.fastmcp import FastMCP
 
 # Core configuration loaded safely from the host environment
 # Set to azure, aws, or hashicorp to define your primary backend.
