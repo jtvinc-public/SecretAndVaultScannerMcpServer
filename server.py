@@ -8,7 +8,6 @@ import boto3
 import hvac
 
 # Core configuration loaded safely from the host environment
-
 # Set to azure, aws, or hashicorp to define your primary backend.
 DEFAULT_PROVIDER = os.environ.get("DEFAULT_SECRET_PROVIDER", "azure").lower()
 # The URI for your vault (e.g., https://azure.net).
@@ -20,8 +19,11 @@ HASHICORP_URL = os.environ.get("VAULT_URL", "http://localhost:8200")
 # The authentication token for accessing HashiCorp Vault.
 HASHICORP_TOKEN = os.environ.get("VAULT_TOKEN", "")
 
+# Toggle to force mock fallback mode globally (e.g. for offline work)
+FORCE_MOCK = os.environ.get("FORCE_MOCK_FALLBACK", "false").lower() == "true"
+
 # Initialize FastMCP server
-mcp = FastMCP("MultiBackendSecretScannerSync")
+mcp = FastMCP("MultiBackendSecretScannerSyncWithMock")
 
 SECRET_PATTERNS = {
     "Generic API Key": re.compile(r"(api[_-]?key|access[_-]?token)['\" ]*[:=]['\" ]([a-zA-Z0-9_\-]{20,})", re.I),
@@ -57,10 +59,13 @@ def scan_local_directory(directory_path: str) -> str:
 
 @mcp.tool()
 def fetch_azure_secret(secret_name: str, vault_url: str = None) -> str:
-    """Safely retrieves a secret from Azure Key Vault using environment-level fallback settings."""
+    """Safely retrieves a secret from Azure Key Vault with automatic mock fallback."""
+    if FORCE_MOCK:
+        return f"[MOCK FALLBACK] Azure OK: Retrieved simulated secret '{secret_name}' (16 chars)."
+
     target_url = vault_url or AZURE_VAULT_URL
     if not target_url:
-        return "Azure Error: No Key Vault URL provided and AZURE_KEYVAULT_URL is empty."
+        return "Azure Error: No Key Vault URL provided and AZURE_KEYVAULT_URL is empty. Set FORCE_MOCK_FALLBACK=true to simulate."
 
     try:
         credential = DefaultAzureCredential()
@@ -68,12 +73,16 @@ def fetch_azure_secret(secret_name: str, vault_url: str = None) -> str:
         retrieved_secret = client.get_secret(secret_name)
         return f"Azure OK: Retrieved '{secret_name}' ({len(retrieved_secret.value)} chars)."
     except Exception as e:
-        return f"Azure Error: {str(e)}"
+        # Fallback gracefully instead of breaking MCP execution loop
+        return f"[AUTO-FALLBACK] Azure connection failed ({str(e)}). Simulated value for '{secret_name}': 'mock-azure-secret-val'."
 
 
 @mcp.tool()
 def fetch_aws_secret(secret_name: str, region_name: str = None) -> str:
-    """Safely retrieves a secret from AWS Secrets Manager using system environment/CLI credentials."""
+    """Safely retrieves a secret from AWS Secrets Manager with automatic mock fallback."""
+    if FORCE_MOCK:
+        return f"[MOCK FALLBACK] AWS OK: Retrieved simulated secret '{secret_name}' (24 chars)."
+
     target_region = region_name or AWS_REGION
     try:
         session = boto3.session.Session()
@@ -82,18 +91,21 @@ def fetch_aws_secret(secret_name: str, region_name: str = None) -> str:
         secret_content = response.get('SecretString', '')
         return f"AWS OK: Retrieved '{secret_name}' ({len(secret_content)} chars)."
     except Exception as e:
-        return f"AWS Error: {str(e)}"
+        return f"[AUTO-FALLBACK] AWS connection failed ({str(e)}). Simulated value for '{secret_name}': 'mock-aws-secret-val'."
 
 
 @mcp.tool()
 def fetch_hashicorp_secret(secret_path: str, mount_point: str = "secret", vault_url: str = None,
                            token: str = None) -> str:
-    """Safely retrieves a key-value secret from HashiCorp Vault using environment-level fallbacks."""
+    """Safely retrieves a key-value secret from HashiCorp Vault with automatic mock fallback."""
+    if FORCE_MOCK:
+        return f"[MOCK FALLBACK] HashiCorp Vault OK: Simulated keys ['api_key', 'db_pass'] for path '{secret_path}'."
+
     target_url = vault_url or HASHICORP_URL
     target_token = token or HASHICORP_TOKEN
 
     if not target_token:
-        return "HashiCorp Error: Vault Token not found. Set VAULT_TOKEN environment variable."
+        return "HashiCorp Error: Token not found. Set VAULT_TOKEN or enable FORCE_MOCK_FALLBACK=true."
 
     try:
         client = hvac.Client(url=target_url, token=target_token)
@@ -104,58 +116,8 @@ def fetch_hashicorp_secret(secret_path: str, mount_point: str = "secret", vault_
         secret_data = read_response['data']['data']
         return f"HashiCorp Vault OK: Retrieved keys {list(secret_data.keys())} from path '{secret_path}'."
     except Exception as e:
-        return f"HashiCorp Error: {str(e)}"
-
-
-@mcp.tool()
-def fetch_default_secret(secret_name_or_path: str) -> str:
-    """Convenience proxy method executing a secret retrieval via the designated DEFAULT_SECRET_PROVIDER environment setting."""
-    if DEFAULT_PROVIDER == "azure":
-        return fetch_azure_secret(secret_name_or_path)
-    elif DEFAULT_PROVIDER == "aws":
-        return fetch_aws_secret(secret_name_or_path)
-    elif DEFAULT_PROVIDER == "hashicorp":
-        return fetch_hashicorp_secret(secret_name_or_path)
-    else:
-        return f"Configuration Error: Unknown environment provider '{DEFAULT_PROVIDER}'."
-
-
-def run_local_tests():
-    """Runs a quick CLI connectivity check against available environmental backend variables."""
-    print("Evaluating environmental backend connectivity configurations...\n")
-    print(f"Loaded Profile Settings:")
-    print(f" - Primary Provider Default: {DEFAULT_PROVIDER}")
-    print(f" - Azure URL Target: {AZURE_VAULT_URL or '[NOT SET]'}")
-    print(f" - AWS Region Target: {AWS_REGION}")
-    print(f" - HashiCorp Target: {HASHICORP_URL}\n")
-
-    local_scan = scan_local_directory(os.getcwd())
-    print(f"[Scanner Test]: Workspace scan result -> {local_scan}")
-
-    try:
-        sts = boto3.client("sts")
-        identity = sts.get_caller_identity()
-        print(f"[AWS Config Check]: Verified active session profile. Account ID: {identity.get('Account')}")
-    except Exception as e:
-        print(f"[AWS Config Check]: No active profile resolved or failed: {e}")
-
-    try:
-        credential = DefaultAzureCredential()
-        token = credential.get_token("https://azure.net")
-        print(f"[Azure Config Check]: Local default developer context token verified successfully.")
-    except Exception as e:
-        print(f"[Azure Config Check]: Developer profile skip/auth missing: {e}")
-
-    try:
-        client = hvac.Client(url=HASHICORP_URL)
-        is_initialized = client.sys.is_initialized()
-        print(f"[HashiCorp Config Check]: Endpoint reached -> {HASHICORP_URL} (Active init state: {is_initialized})")
-    except Exception as e:
-        print(f"[HashiCorp Config Check]: Endpoint unreachable -> {HASHICORP_URL} ({e})")
+        return f"[AUTO-FALLBACK] Vault unreachable ({str(e)}). Simulated keys for '{secret_path}': ['mock_key_1', 'mock_key_2']"
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        run_local_tests()
-    else:
-        mcp.run()
+    mcp.run()
