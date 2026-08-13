@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from mcp.server.fastmcp import FastMCP
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
@@ -12,6 +13,7 @@ SECRET_PATTERNS = {
     "Generic API Key": re.compile(r"(api[_-]?key|access[_-]?token)['\" ]*[:=]['\" ]([a-zA-Z0-9_\-]{20,})", re.I),
     "AWS Access Key": re.compile(r"(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}", re.I)
 }
+
 
 @mcp.tool()
 def scan_local_directory(directory_path: str) -> str:
@@ -38,6 +40,7 @@ def scan_local_directory(directory_path: str) -> str:
 
     return "\n".join(findings) if findings else "No plaintext secrets detected."
 
+
 @mcp.tool()
 def fetch_azure_secret(secret_name: str, vault_url: str) -> str:
     """Safely retrieves a secret from Azure Key Vault."""
@@ -48,6 +51,7 @@ def fetch_azure_secret(secret_name: str, vault_url: str) -> str:
         return f"Azure OK: Retrieved '{secret_name}' ({len(retrieved_secret.value)} chars)."
     except Exception as e:
         return f"Azure Error: {str(e)}"
+
 
 @mcp.tool()
 def fetch_aws_secret(secret_name: str, region_name: str = "us-east-1") -> str:
@@ -61,12 +65,13 @@ def fetch_aws_secret(secret_name: str, region_name: str = "us-east-1") -> str:
     except Exception as e:
         return f"AWS Error: {str(e)}"
 
+
 @mcp.tool()
-def fetch_hashicorp_secret(secret_path: str, mount_point: str = "secret", vault_url: str = "http://localhost:8200", token: str = None) -> str:
+def fetch_hashicorp_secret(secret_path: str, mount_point: str = "secret", vault_url: str = "http://localhost:8200",
+                           token: str = None) -> str:
     """Safely retrieves a key-value secret from HashiCorp Vault."""
     try:
         client = hvac.Client(url=vault_url, token=token or os.environ.get("VAULT_TOKEN"))
-        # Read KV version 2 path
         read_response = client.secrets.kv.v2.read_secret_version(
             mount_point=mount_point,
             path=secret_path,
@@ -76,5 +81,45 @@ def fetch_hashicorp_secret(secret_path: str, mount_point: str = "secret", vault_
     except Exception as e:
         return f"HashiCorp Error: {str(e)}"
 
+
+def run_local_tests():
+    """Runs a quick CLI connectivity check against available local/cloud tools."""
+    print("Running local backend connectivity checks...\n")
+
+    # Test Local Directory Scanner on current workspace
+    local_scan = scan_local_directory(os.getcwd())
+    print(
+        f"[Scanner Test]: Scanned current dir. Result: {local_scan.splitlines()[0] if '\n' in local_scan else local_scan}")
+
+    # Test AWS connection (checks if local boto3 session can resolve identity/sts)
+    try:
+        sts = boto3.client("sts")
+        identity = sts.get_caller_identity()
+        print(f"[AWS Test]: Connected successfully. Account: {identity.get('Account')}")
+    except Exception as e:
+        print(f"[AWS Test]: Skipped or failed local credentials check ({e})")
+
+    # Test Azure Default Credential chain availability
+    try:
+        credential = DefaultAzureCredential()
+        # Just check token acquisition scope for Azure management or vault
+        token = credential.get_token("https://azure.net")
+        print(f"[Azure Test]: DefaultAzureCredential resolved successfully.")
+    except Exception as e:
+        print(f"[Azure Test]: Skipped or failed token check (Run 'az login' if needed: {e})")
+
+    # Test HashiCorp Vault health endpoint
+    vault_url = os.environ.get("VAULT_URL", "http://localhost:8200")
+    try:
+        client = hvac.Client(url=vault_url)
+        is_initialized = client.sys.is_initialized()
+        print(f"[HashiCorp Test]: Reached vault at {vault_url} (Initialized: {is_initialized})")
+    except Exception as e:
+        print(f"[HashiCorp Test]: Could not reach vault at {vault_url} ({e})")
+
+
 if __name__ == "__main__":
-    mcp.run()
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        run_local_tests()
+    else:
+        mcp.run()
