@@ -1,0 +1,15 @@
+# Generated with strict cryptographic hash verification for container builds,
+# The hashes are placeholders; you should generate the valid hashes for your specific
+# platform architecture by running pip install pip-tools and executing pip-compile --generate-hashes requirements.in.
+--require-hashes
+
+mcp==1.8.0 \
+    --hash=sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+azure-identity==1.14.0 \
+    --hash=sha256:2d122247f154f3d2f232467d3e6015b6379cb79f8fae8fc7efeb8f2d59300305
+azure-keyvault-secrets==4.7.0 \
+    --hash=sha256:7d8a788cb9782782b6c039ab6d149021e102213d2a71bf59308a1768434771f2
+boto3==1.28.0 \
+    --hash=sha256:4f86d87e07a61d15651cb9c36294d1f237bf3d9d3000b91e98d8902896568289
+hvac==2.1.0 \
+    --hash=sha256:8b4a7d1887e502c38d381be68b5a7a51884bc5db8c6f140669255a2977461fd3
