@@ -1,10 +1,12 @@
+import json
 import os
 import re
-import boto3
-import hvac
+import sys
+from mcp.server.fastmcp import FastMCP
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
-from mcp.server.fastmcp import FastMCP
+import boto3
+import hvac
 
 # Core configuration loaded safely from the host environment
 # Set to azure, aws, or hashicorp to define your primary backend.
@@ -20,9 +22,24 @@ HASHICORP_TOKEN = os.environ.get("VAULT_TOKEN", "")
 
 # Toggle to force mock fallback mode globally (e.g. for offline work)
 FORCE_MOCK = os.environ.get("FORCE_MOCK_FALLBACK", "false").lower() == "true"
+MOCK_FILE_PATH = os.environ.get("MOCK_SECRETS_FILE", "mock_secrets.json")
+
+
+def load_mock_dictionary() -> dict:
+    """Loads the external mock data dictionary safely from a JSON file."""
+    if os.path.exists(MOCK_FILE_PATH):
+        try:
+            with open(MOCK_FILE_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Warning: Failed to parse {MOCK_FILE_PATH} ({e}). Using empty mock fallback.", file=sys.stderr)
+    return {"azure": {}, "aws": {}, "hashicorp": {}}
+
+
+MOCK_SECRET_DICTIONARY = load_mock_dictionary()
 
 # Initialize FastMCP server
-mcp = FastMCP("MultiBackendSecretScannerSyncWithMock")
+mcp = FastMCP("MultiBackendSecretScannerSyncWithExternalMock")
 
 SECRET_PATTERNS = {
     "Generic API Key": re.compile(r"(api[_-]?key|access[_-]?token)['\" ]*[:=]['\" ]([a-zA-Z0-9_\-]{20,})", re.I),
@@ -58,13 +75,15 @@ def scan_local_directory(directory_path: str) -> str:
 
 @mcp.tool()
 def fetch_azure_secret(secret_name: str, vault_url: str = None) -> str:
-    """Safely retrieves a secret from Azure Key Vault with automatic mock fallback."""
-    if FORCE_MOCK:
-        return f"[MOCK FALLBACK] Azure OK: Retrieved simulated secret '{secret_name}' (16 chars)."
+    """Safely retrieves a secret from Azure Key Vault with external JSON mock lookup."""
+    azure_mocks = MOCK_SECRET_DICTIONARY.get("azure", {})
+    if FORCE_MOCK or secret_name in azure_mocks:
+        val = azure_mocks.get(secret_name, f"simulated-val-for-{secret_name}")
+        return f"[JSON MOCK] Azure OK: Retrieved '{secret_name}' ({len(str(val))} chars)."
 
     target_url = vault_url or AZURE_VAULT_URL
     if not target_url:
-        return "Azure Error: No Key Vault URL provided and AZURE_KEYVAULT_URL is empty. Set FORCE_MOCK_FALLBACK=true to simulate."
+        return "Azure Error: No Key Vault URL provided and AZURE_KEYVAULT_URL is empty."
 
     try:
         credential = DefaultAzureCredential()
@@ -72,15 +91,16 @@ def fetch_azure_secret(secret_name: str, vault_url: str = None) -> str:
         retrieved_secret = client.get_secret(secret_name)
         return f"Azure OK: Retrieved '{secret_name}' ({len(retrieved_secret.value)} chars)."
     except Exception as e:
-        # Fallback gracefully instead of breaking MCP execution loop
-        return f"[AUTO-FALLBACK] Azure connection failed ({str(e)}). Simulated value for '{secret_name}': 'mock-azure-secret-val'."
+        return f"[AUTO-FALLBACK] Azure connection failed ({str(e)}). Simulated value for '{secret_name}': 'mock-azure-val'."
 
 
 @mcp.tool()
 def fetch_aws_secret(secret_name: str, region_name: str = None) -> str:
-    """Safely retrieves a secret from AWS Secrets Manager with automatic mock fallback."""
-    if FORCE_MOCK:
-        return f"[MOCK FALLBACK] AWS OK: Retrieved simulated secret '{secret_name}' (24 chars)."
+    """Safely retrieves a secret from AWS Secrets Manager with external JSON mock lookup."""
+    aws_mocks = MOCK_SECRET_DICTIONARY.get("aws", {})
+    if FORCE_MOCK or secret_name in aws_mocks:
+        val = aws_mocks.get(secret_name, f"simulated-val-for-{secret_name}")
+        return f"[JSON MOCK] AWS OK: Retrieved '{secret_name}' ({len(str(val))} chars)."
 
     target_region = region_name or AWS_REGION
     try:
@@ -90,15 +110,17 @@ def fetch_aws_secret(secret_name: str, region_name: str = None) -> str:
         secret_content = response.get('SecretString', '')
         return f"AWS OK: Retrieved '{secret_name}' ({len(secret_content)} chars)."
     except Exception as e:
-        return f"[AUTO-FALLBACK] AWS connection failed ({str(e)}). Simulated value for '{secret_name}': 'mock-aws-secret-val'."
+        return f"[AUTO-FALLBACK] AWS connection failed ({str(e)}). Simulated value for '{secret_name}': 'mock-aws-val'."
 
 
 @mcp.tool()
 def fetch_hashicorp_secret(secret_path: str, mount_point: str = "secret", vault_url: str = None,
                            token: str = None) -> str:
-    """Safely retrieves a key-value secret from HashiCorp Vault with automatic mock fallback."""
-    if FORCE_MOCK:
-        return f"[MOCK FALLBACK] HashiCorp Vault OK: Simulated keys ['api_key', 'db_pass'] for path '{secret_path}'."
+    """Safely retrieves a key-value secret from HashiCorp Vault with external JSON mock lookup."""
+    vault_mocks = MOCK_SECRET_DICTIONARY.get("hashicorp", {})
+    if FORCE_MOCK or secret_path in vault_mocks:
+        val = vault_mocks.get(secret_path, {"mock_key": "simulated-value"})
+        return f"[JSON MOCK] HashiCorp Vault OK: Retrieved keys {list(val.keys() if isinstance(val, dict) else [])} for path '{secret_path}'."
 
     target_url = vault_url or HASHICORP_URL
     target_token = token or HASHICORP_TOKEN
@@ -115,7 +137,7 @@ def fetch_hashicorp_secret(secret_path: str, mount_point: str = "secret", vault_
         secret_data = read_response['data']['data']
         return f"HashiCorp Vault OK: Retrieved keys {list(secret_data.keys())} from path '{secret_path}'."
     except Exception as e:
-        return f"[AUTO-FALLBACK] Vault unreachable ({str(e)}). Simulated keys for '{secret_path}': ['mock_key_1', 'mock_key_2']"
+        return f"[AUTO-FALLBACK] Vault unreachable ({str(e)}). Simulated keys for '{secret_path}': ['mock_key_1']"
 
 
 if __name__ == "__main__":
