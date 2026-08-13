@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import (FastMCP)
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 import boto3
@@ -118,6 +118,7 @@ def run_local_tests():
         print(f"[HashiCorp Test]: Could not reach vault at {vault_url} ({e})")
 
 
+# Run the MCP  server: python server.py; Run the connectivity checks: python server.py test
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         run_local_tests()
